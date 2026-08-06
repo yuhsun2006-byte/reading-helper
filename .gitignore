@@ -1,0 +1,12 @@
+node_modules/
+dist/
+
+# 個人工作文件，留在本機不進版控
+CLAUDE.md
+PROMPT.md
+
+*.log
+npm-debug.log*
+
+.DS_Store
+Thumbs.db

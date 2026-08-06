@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>星空閱讀倒計時</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+
+  body {
+    margin: 0;
+    background: #000;
+    color: #f2f2f2;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft JhengHei",
+                 "PingFang TC", "Noto Sans TC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body.idle { cursor: none; }
+
+  :focus-visible { outline: 1px solid #6e6e6e; outline-offset: 3px; }
+  :focus:not(:focus-visible) { outline: none; }
+
+  button {
+    background: none; border: 0; margin: 0; padding: 0;
+    font: inherit; color: inherit; cursor: pointer;
+  }
+
+  /* ---------- 星空 ---------- */
+  #sky { position: fixed; inset: 0; display: block; z-index: 0; }
+  #sky.off { display: none; }
+
+  /* ---------- 中央區塊 ---------- */
+  .center {
+    position: relative; z-index: 2;
+    min-height: 100vh;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 26px;
+    pointer-events: none;
+    transition: opacity .7s ease;
+  }
+  body.clock-hidden .center { opacity: 0; }
+  body.clock-hidden.peek .center { opacity: 1; }
+
+  .status {
+    font-size: 12px;
+    letter-spacing: 5px;
+    color: #565656;
+    margin-right: -5px; /* 抵銷字距在尾端多出的空隙，讓文字真正置中 */
+  }
+
+  .time {
+    font-size: clamp(58px, 15vw, 168px);
+    font-weight: 200;               /* 刻意壓細：粗字在暗背景會有光暈感 */
+    color: #f2f2f2;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+
+  .bar { width: min(360px, 46vw); height: 2px; background: #1e1e1e; }
+  .bar-fill { width: 0; height: 100%; background: #6e6e6e; transition: width .3s linear; }
+
+  .total { font-size: 12px; color: #4a4a4a; }
+
+  /* ---------- 隱藏時鐘時的底部暗進度線 ---------- */
+  .edge {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    height: 2px; background: #0d0d0d;
+    z-index: 3; opacity: 0; pointer-events: none;
+    transition: opacity .7s ease;
+  }
+  body.clock-hidden .edge { opacity: 1; }
+  .edge-fill { width: 0; height: 100%; background: #3a3a3a; transition: width .3s linear; }
+
+  /* ---------- 右上文字按鈕 ---------- */
+  .toolbar {
+    position: fixed; top: 18px; right: 20px; z-index: 4;
+    display: flex; align-items: center; gap: 18px;
+  }
+  .toolbar button {
+    font-size: 12px; letter-spacing: 1px; color: #565656;
+    transition: color .2s ease;
+  }
+  .toolbar button:hover { color: #9a9a9a; }
+  .toolbar button.on { color: #d8d8d8; }
+
+  /* ---------- 底部膠囊控制列 ---------- */
+  .dock {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+    z-index: 4;
+    display: flex; align-items: center; gap: 14px;
+    padding: 9px 15px;
+    background: #0e0e0e;
+    border: 1px solid #1c1c1c;
+    border-radius: 999px;
+  }
+  .run {
+    width: 34px; height: 34px; border-radius: 50%;
+    background: #d8d8d8;
+    display: grid; place-items: center;
+    transition: background .2s ease;
+    flex: none;
+  }
+  .run:hover { background: #efefef; }
+  .run svg { display: block; }
+  .run .ico-pause { display: none; }
+  body.running .run .ico-play { display: none; }
+  body.running .run .ico-pause { display: block; }
+
+  .dock .txt, .dock .preset {
+    font-size: 12px; letter-spacing: 1px; color: #565656;
+    transition: color .2s ease;
+  }
+  .dock .txt:hover, .dock .preset:hover { color: #9a9a9a; }
+  .dock .txt.on, .dock .preset.on { color: #d8d8d8; }
+  .sep { width: 1px; height: 14px; background: #262626; flex: none; }
+
+  .custom-input {
+    width: 58px;
+    background: #000; border: 1px solid #2a2a2a; border-radius: 4px;
+    color: #d8d8d8; font: inherit; font-size: 12px; padding: 3px 6px;
+  }
+  .custom-input::-webkit-inner-spin-button,
+  .custom-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+  /* ---------- 兩排控制列的閒置淡出 ---------- */
+  .toolbar, .dock { transition: opacity .5s ease; }
+  body.idle .toolbar, body.idle .dock { opacity: 0; pointer-events: none; }
+
+  /* ---------- 快捷鍵面板 ---------- */
+  .keys {
+    position: fixed; top: 46px; right: 20px; z-index: 5;
+    min-width: 216px; padding: 13px 15px;
+    background: #0b0b0b; border: 1px solid #1c1c1c; border-radius: 6px;
+    font-size: 12px; color: #565656;
+    transition: opacity .5s ease;
+  }
+  body.idle .keys { opacity: 0; pointer-events: none; }
+  .keys .row { display: flex; justify-content: space-between; gap: 24px; padding: 3px 0; }
+  .keys .k { color: #9a9a9a; }
+  .keys .group { margin: 11px 0 3px; font-size: 11px; letter-spacing: 2px; color: #3d3d3d; }
+  .keys .group:first-child { margin-top: 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<canvas id="sky"></canvas>
+
+<div class="edge" id="edge"><div class="edge-fill" id="edgeFill"></div></div>
+
+<main class="center" id="center">
+  <div class="status" id="status">準備開始</div>
+  <div class="time" id="time">45:00</div>
+  <div class="bar"><div class="bar-fill" id="barFill"></div></div>
+  <div class="total" id="total">45 分鐘</div>
+</main>
+
+<nav class="toolbar" id="toolbar">
+  <button id="btnSky" type="button">星空</button>
+  <button id="btnHide" type="button">隱藏時鐘</button>
+  <button id="btnTop" type="button">置頂</button>
+  <button id="btnFull" type="button">全螢幕</button>
+  <button id="btnKeys" type="button">快捷鍵</button>
+</nav>
+
+<div class="keys" id="keysPanel" hidden>
+  <div class="group">視窗內</div>
+  <div class="row"><span>開始 / 暫停</span><span class="k">空白</span></div>
+  <div class="row"><span>偷看時間</span><span class="k">P</span></div>
+  <div class="row"><span>重設</span><span class="k">R</span></div>
+  <div class="row"><span>隱藏 / 顯示時鐘</span><span class="k">H</span></div>
+  <div class="row"><span>星空開關</span><span class="k">S</span></div>
+  <div class="row"><span>視窗置頂</span><span class="k">T</span></div>
+  <div class="row"><span>全螢幕</span><span class="k">F</span></div>
+  <div class="row"><span>25 / 45 / 60 分鐘</span><span class="k">1 / 2 / 3</span></div>
+  <div class="group" id="globalKeysTitle">全域</div>
+  <div class="row" data-global><span>開始 / 暫停</span><span class="k">Ctrl+Alt+Space</span></div>
+  <div class="row" data-global><span>隱藏 / 顯示時鐘</span><span class="k">Ctrl+Alt+H</span></div>
+  <div class="row" data-global><span>視窗置頂</span><span class="k">Ctrl+Alt+T</span></div>
+</div>
+
+<div class="dock" id="dock">
+  <button class="run" id="btnRun" type="button" aria-label="開始">
+    <svg class="ico-play" width="12" height="14" viewBox="0 0 12 14" aria-hidden="true">
+      <path d="M2 1 L11 7 L2 13 Z" fill="#0a0a0a"></path>
+    </svg>
+    <svg class="ico-pause" width="12" height="14" viewBox="0 0 12 14" aria-hidden="true">
+      <rect x="1.5" y="1" width="3" height="12" fill="#0a0a0a"></rect>
+      <rect x="7.5" y="1" width="3" height="12" fill="#0a0a0a"></rect>
+    </svg>
+  </button>
+  <button class="txt" id="btnReset" type="button">重設</button>
+  <span class="sep"></span>
+  <button class="preset" type="button" data-min="25">25</button>
+  <button class="preset" type="button" data-min="45">45</button>
+  <button class="preset" type="button" data-min="60">60</button>
+  <button class="txt" id="btnCustom" type="button">自訂</button>
+  <input class="custom-input" id="customInput" type="number" min="1" max="600" step="1"
+         aria-label="自訂分鐘數（1–600）" hidden>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  var canvas = $("sky");
+  var ctx = canvas.getContext("2d");
+  var statusEl = $("status");
+  var timeEl = $("time");
+  var barFill = $("barFill");
+  var edgeFill = $("edgeFill");
+  var totalEl = $("total");
+  var btnSky = $("btnSky"), btnHide = $("btnHide"), btnTop = $("btnTop");
+  var btnFull = $("btnFull"), btnKeys = $("btnKeys");
+  var btnRun = $("btnRun"), btnReset = $("btnReset"), btnCustom = $("btnCustom");
+  var customInput = $("customInput");
+  var keysPanel = $("keysPanel");
+  var presets = Array.prototype.slice.call(document.querySelectorAll(".preset"));
+
+  var desktop = window.desktop || null;   // preload 注入，瀏覽器直開時為 null
+
+  /* ================= localStorage：整段包 try/catch，失敗無聲降級 ================= */
+
+  var store = {
+    get: function (key, fallback) {
+      try {
+        var raw = localStorage.getItem("srt." + key);
+        return raw === null ? fallback : JSON.parse(raw);
+      } catch (e) { return fallback; }
+    },
+    set: function (key, value) {
+      try { localStorage.setItem("srt." + key, JSON.stringify(value)); } catch (e) { /* 忽略 */ }
+    }
+  };
+
+  /* ================= 計時：一律對絕對結束時間計算 ================= */
+
+  var STATUS_TEXT = { idle: "準備開始", running: "專注中", paused: "已暫停", done: "時間到" };
+
+  var durationMs = 45 * 60 * 1000;
+  var remainingMs = durationMs;
+  var endAt = 0;              // 只有 running 時有效
+  var mode = "idle";
+  var lastShownSeconds = -1;  // 只在顯示秒數改變時動 DOM
+
+  function currentRemaining() {
+    if (mode === "running") return Math.max(0, endAt - Date.now());
+    return remainingMs;
+  }
+
+  function formatTime(ms) {
+    var total = Math.max(0, Math.ceil(ms / 1000));
+    var s = total % 60;
+    var m = Math.floor(total / 60);
+    var pad = function (n) { return n < 10 ? "0" + n : String(n); };
+    if (total > 6000) {                      // 超過 100 分鐘才切 h:mm:ss
+      var h = Math.floor(total / 3600);
+      return h + ":" + pad(m % 60) + ":" + pad(s);
+    }
+    return pad(m) + ":" + pad(s);
+  }
+
+  function render() {
+    var rem = currentRemaining();
+    var secs = Math.ceil(rem / 1000);
+    if (secs === lastShownSeconds) return;
+    lastShownSeconds = secs;
+
+    timeEl.textContent = formatTime(rem);
+
+    var ratio = durationMs > 0 ? 1 - rem / durationMs : 0;
+    if (ratio < 0) ratio = 0; else if (ratio > 1) ratio = 1;
+    var pct = (ratio * 100).toFixed(2) + "%";
+    barFill.style.width = pct;
+    edgeFill.style.width = pct;
+  }
+
+  function applyMode() {
+    statusEl.textContent = STATUS_TEXT[mode];
+    document.body.classList.toggle("running", mode === "running");
+    btnRun.setAttribute("aria-label", mode === "running" ? "暫停" : "開始");
+  }
+
+  function start() {
+    if (mode === "running") return;
+    if (mode === "done") { remainingMs = durationMs; lastShownSeconds = -1; }
+    if (remainingMs <= 0) remainingMs = durationMs;
+    ensureAudio();                       // 借這次使用者操作解除自動播放限制
+    endAt = Date.now() + remainingMs;
+    mode = "running";
+    applyMode();
+    render();
+  }
+
+  function pause() {
+    if (mode !== "running") return;
+    remainingMs = Math.max(0, endAt - Date.now());
+    endAt = 0;
+    mode = "paused";
+    applyMode();
+  }
+
+  function toggleRun() { if (mode === "running") pause(); else start(); }
+
+  function reset() {
+    mode = "idle";
+    remainingMs = durationMs;
+    endAt = 0;
+    lastShownSeconds = -1;
+    applyMode();
+    render();
+  }
+
+  function setDuration(minutes) {
+    var m = Math.round(minutes);
+    if (!isFinite(m)) return;
+    if (m < 1) m = 1; else if (m > 600) m = 600;
+    durationMs = m * 60000;
+    store.set("durationMin", m);
+    totalEl.textContent = m + " 分鐘";
+    presets.forEach(function (b) {
+      b.classList.toggle("on", Number(b.dataset.min) === m);
+    });
+    btnCustom.classList.toggle("on", m !== 25 && m !== 45 && m !== 60);
+    reset();
+  }
+
+  function finish() {
+    remainingMs = 0;
+    endAt = 0;
+    mode = "done";
+    applyMode();
+    render();
+    if (clockHidden) setClockHidden(false);   // 時間到強制顯示
+    playChime();
+  }
+
+  // 計時邏輯獨立於 rAF：視窗被遮住時 rAF 會停，但這裡照跑。
+  setInterval(function () {
+    if (mode === "running" && Date.now() >= endAt) { finish(); return; }
+    render();
+  }, 200);
+
+  /* ================= 隱藏時鐘 / 偷看 ================= */
+
+  var clockHidden = false;
+  var peekTimer = 0;
+
+  function setClockHidden(value) {
+    clockHidden = value;
+    document.body.classList.toggle("clock-hidden", value);
+    btnHide.classList.toggle("on", value);
+    if (!value) {
+      document.body.classList.remove("peek");
+      clearTimeout(peekTimer);
+    }
+  }
+
+  function peek() {
+    if (!clockHidden) return;
+    document.body.classList.add("peek");
+    clearTimeout(peekTimer);
+    peekTimer = setTimeout(function () {
+      document.body.classList.remove("peek");
+    }, 2200);
+  }
+
+  /* ================= 控制列閒置淡出 ================= */
+
+  var idleTimer = 0;
+
+  function wake() {
+    document.body.classList.remove("idle");
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(function () {
+      document.body.classList.add("idle");
+    }, 2600);
+  }
+
+  function onPointerActivity() { wake(); peek(); }
+
+  document.addEventListener("mousemove", onPointerActivity);
+  document.addEventListener("mousedown", onPointerActivity);
+  document.addEventListener("wheel", onPointerActivity, { passive: true });
+
+  /* ================= 結束通知：C-E-G 上行琶音 ================= */
+
+  var audioCtx = null;
+
+  function ensureAudio() {
+    try {
+      if (!audioCtx) {
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return null;
+        audioCtx = new AC();
+      }
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      return audioCtx;
+    } catch (e) { return null; }
+  }
+
+  function playChime() {
+    var ac = ensureAudio();
+    if (!ac) return;
+    try {
+      var freqs = [523.25, 659.25, 783.99];
+      var base = ac.currentTime + 0.05;
+      for (var i = 0; i < freqs.length; i++) {
+        var t = base + i * 0.5;
+        var osc = ac.createOscillator();
+        var gain = ac.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(freqs[i], t);
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.exponentialRampToValueAtTime(0.16, t + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + 1.8);
+        osc.connect(gain);
+        gain.connect(ac.destination);
+        osc.start(t);
+        osc.stop(t + 1.85);
+      }
+    } catch (e) { /* 沒有音訊裝置就算了 */ }
+  }
+
+  /* ================= 星空 ================= */
+
+  // PROMPT.md 原始值是「盯著看才發現在動」的極慢速（近層橫跨 1920px 要 25.6 分鐘），
+  // 依後來的要求改成「餘光察覺得到」：飄移 ×3、閃爍幅度加大。
+  // 要回到原始手感：SPEED_SCALE 設回 1，twinkle 改回 0.10 / 0.13 / 0.16。
+  var SPEED_SCALE = 3;
+  var LAYERS = [
+    { share: 0.55, speed: 0.32, rMin: 0.4, rMax: 0.8, aMin: 0.14, aMax: 0.34, twinkle: 0.25 },
+    { share: 0.30, speed: 0.72, rMin: 0.6, rMax: 1.1, aMin: 0.30, aMax: 0.60, twinkle: 0.30 },
+    { share: 0.15, speed: 1.30, rMin: 0.9, rMax: 1.7, aMin: 0.55, aMax: 1.00, twinkle: 0.35 }
+  ];
+  var ANGLE = 196 * Math.PI / 180;
+  var DIR_X = Math.cos(ANGLE);
+  var DIR_Y = Math.sin(ANGLE);
+
+  var stars = [];
+  var viewW = 0, viewH = 0;
+  var clock = 0;          // 閃爍用的累積秒數
+  var rafId = 0;
+  var lastFrame = 0;
+  var skyOn = true;
+
+  var motionQuery = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+  var reducedMotion = motionQuery ? motionQuery.matches : false;
+
+  function buildSky() {
+    var dpr = Math.min(2, window.devicePixelRatio || 1);
+    viewW = window.innerWidth;
+    viewH = window.innerHeight;
+
+    canvas.width = Math.round(viewW * dpr);
+    canvas.height = Math.round(viewH * dpr);
+    canvas.style.width = viewW + "px";
+    canvas.style.height = viewH + "px";
+    // 改 width/height 會重置 context 狀態，transform 與 fillStyle 要重設
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = "#ffffff";
+
+    var total = Math.round(viewW * viewH / 6200);
+    if (total < 140) total = 140; else if (total > 460) total = 460;
+
+    stars = [];
+    for (var i = 0; i < LAYERS.length; i++) {
+      var L = LAYERS[i];
+      var n = Math.round(total * L.share);
+      for (var j = 0; j < n; j++) {
+        stars.push({
+          x: Math.random() * viewW,
+          y: Math.random() * viewH,
+          r: L.rMin + Math.random() * (L.rMax - L.rMin),
+          alpha: L.aMin + Math.random() * (L.aMax - L.aMin),
+          speed: L.speed * SPEED_SCALE,
+          twinkle: L.twinkle,
+          phase: Math.random() * Math.PI * 2,
+          freq: 0.25 + Math.random() * 0.5
+        });
+      }
+    }
+  }
+
+  function drawSky(dt) {
+    clock += dt;
+    ctx.clearRect(0, 0, viewW, viewH);
+    var move = reducedMotion ? 0 : dt;
+
+    for (var i = 0; i < stars.length; i++) {
+      var s = stars[i];
+      if (move > 0) {
+        s.x += DIR_X * s.speed * move;
+        s.y += DIR_Y * s.speed * move;
+        var pad = s.r + 2;
+        if (s.x < -pad) s.x = viewW + pad;
+        else if (s.x > viewW + pad) s.x = -pad;
+        if (s.y < -pad) s.y = viewH + pad;
+        else if (s.y > viewH + pad) s.y = -pad;
+      }
+      var a = s.alpha + Math.sin(clock * s.freq * Math.PI * 2 + s.phase) * s.twinkle;
+      ctx.globalAlpha = a < 0 ? 0 : (a > 1 ? 1 : a);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function frame(now) {
+    var dt = (now - lastFrame) / 1000;
+    lastFrame = now;
+    if (dt < 0) dt = 0; else if (dt > 0.1) dt = 0.1;   // 切回視窗時不要瞬移
+    drawSky(dt);
+    rafId = requestAnimationFrame(frame);
+  }
+
+  function startSky() {
+    if (rafId) return;
+    lastFrame = performance.now();
+    rafId = requestAnimationFrame(frame);
+  }
+
+  function stopSky() {
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = 0;
+    ctx.clearRect(0, 0, viewW, viewH);
+  }
+
+  function setSky(value) {
+    skyOn = value;
+    canvas.classList.toggle("off", !value);
+    btnSky.classList.toggle("on", value);
+    store.set("skyOn", value);
+    if (value) { buildSky(); startSky(); } else { stopSky(); }
+  }
+
+  var resizeTimer = 0;
+  window.addEventListener("resize", function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () {
+      if (skyOn) buildSky();      // 重建而非縮放，避免星星變形
+    }, 150);
+  });
+
+  if (motionQuery) {
+    var onMotionChange = function () { reducedMotion = motionQuery.matches; };
+    if (motionQuery.addEventListener) motionQuery.addEventListener("change", onMotionChange);
+    else if (motionQuery.addListener) motionQuery.addListener(onMotionChange);
+  }
+
+  /* ================= 置頂 / 全螢幕 ================= */
+
+  function toggleAlwaysOnTop() {
+    if (!desktop) return;
+    desktop.toggleAlwaysOnTop().then(function (value) {
+      btnTop.classList.toggle("on", value);
+    });
+  }
+
+  function toggleFullScreen() {
+    if (desktop) {
+      desktop.toggleFullScreen().then(function (value) {
+        btnFull.classList.toggle("on", value);
+      });
+      return;
+    }
+    // 瀏覽器直開：改用 Fullscreen API
+    if (document.fullscreenElement) document.exitFullscreen();
+    else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen();
+  }
+
+  document.addEventListener("fullscreenchange", function () {
+    if (!desktop) btnFull.classList.toggle("on", !!document.fullscreenElement);
+  });
+
+  /* ================= 自訂分鐘數 ================= */
+
+  function openCustom() {
+    customInput.value = String(Math.round(durationMs / 60000));
+    btnCustom.hidden = true;
+    customInput.hidden = false;
+    customInput.focus();
+    customInput.select();
+  }
+
+  function closeCustom() {
+    customInput.hidden = true;
+    btnCustom.hidden = false;
+  }
+
+  btnCustom.addEventListener("click", openCustom);
+
+  customInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      var value = parseInt(customInput.value, 10);
+      if (isFinite(value)) setDuration(value);
+      closeCustom();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closeCustom();
+    }
+  });
+  // 不用 blur 關閉：輸入框一收起來，膠囊列會變窄，mousedown 到 mouseup 之間的
+  // 位移會讓點在 25/45/60 上的那一下落空。改成只有點到控制列外面才收。
+  document.addEventListener("mousedown", function (e) {
+    if (customInput.hidden) return;
+    if (!e.target.closest || !e.target.closest("#dock")) closeCustom();
+  });
+
+  /* ================= 按鈕 ================= */
+
+  btnRun.addEventListener("click", toggleRun);
+  btnReset.addEventListener("click", reset);
+  presets.forEach(function (b) {
+    b.addEventListener("click", function () { closeCustom(); setDuration(Number(b.dataset.min)); });
+  });
+
+  btnSky.addEventListener("click", function () { setSky(!skyOn); });
+  btnHide.addEventListener("click", function () { setClockHidden(!clockHidden); });
+  btnTop.addEventListener("click", toggleAlwaysOnTop);
+  btnFull.addEventListener("click", toggleFullScreen);
+  btnKeys.addEventListener("click", function () {
+    keysPanel.hidden = !keysPanel.hidden;
+    btnKeys.classList.toggle("on", !keysPanel.hidden);
+  });
+
+  /* ================= 視窗內快捷鍵 ================= */
+
+  window.addEventListener("keydown", function (e) {
+    var el = document.activeElement;
+    if (el && (el.tagName === "INPUT" || el.isContentEditable)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    var key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+
+    if (e.code === "Space" || key === " ") {
+      e.preventDefault();     // 同時擋掉「焦點在按鈕上時空白鍵會再按一次」
+      toggleRun();
+      return;
+    }
+
+    switch (key) {
+      case "p": e.preventDefault(); peek(); break;
+      case "r": e.preventDefault(); reset(); break;
+      case "h": e.preventDefault(); setClockHidden(!clockHidden); break;
+      case "s": e.preventDefault(); setSky(!skyOn); break;
+      case "t": e.preventDefault(); toggleAlwaysOnTop(); break;
+      case "f": e.preventDefault(); toggleFullScreen(); break;
+      case "1": e.preventDefault(); setDuration(25); break;
+      case "2": e.preventDefault(); setDuration(45); break;
+      case "3": e.preventDefault(); setDuration(60); break;
+    }
+  });
+
+  /* ================= 主行程來的全域快捷鍵 ================= */
+
+  if (desktop) {
+    desktop.onGlobalShortcut(function (name) {
+      if (name === "toggle-run") toggleRun();
+      else if (name === "toggle-hide") setClockHidden(!clockHidden);
+    });
+    desktop.onAlwaysOnTopChanged(function (value) {
+      btnTop.classList.toggle("on", value);
+    });
+    desktop.onFullScreenChanged(function (value) {
+      btnFull.classList.toggle("on", value);
+    });
+    desktop.getAlwaysOnTop().then(function (value) {
+      btnTop.classList.toggle("on", value);
+    });
+    desktop.getFullScreen().then(function (value) {
+      btnFull.classList.toggle("on", value);
+    });
+  } else {
+    // 瀏覽器直開：沒有置頂可用，連同快捷鍵面板的全域段一起收掉
+    btnTop.hidden = true;
+    $("globalKeysTitle").hidden = true;
+    Array.prototype.forEach.call(keysPanel.querySelectorAll("[data-global]"), function (row) {
+      row.hidden = true;
+    });
+  }
+
+  /* ================= 啟動 ================= */
+
+  var savedMin = store.get("durationMin", 45);
+  setDuration(typeof savedMin === "number" ? savedMin : 45);
+
+  var savedSky = store.get("skyOn", true);
+  setSky(savedSky !== false);
+
+  applyMode();
+  wake();
+})();
+</script>
+</body>
+</html>
